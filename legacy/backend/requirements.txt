@@ -1,6 +1,0 @@
-fastapi
-uvicorn
-docker
-redis
-pynvml
-psutil

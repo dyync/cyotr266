@@ -66,11 +66,11 @@ Open `https://$DOMAIN` and log in.
 The old compose file published Redis, the Docker-control backend, vLLM and every service port to the internet. Stop it **before** starting the new one; the container names are reused.
 
 ```bash
-docker compose -f legacy/docker-compose.yml -p "$(basename "$PWD")" down
-docker rm -f container_vllm_xoo container_vllm_oai container_tr 2>/dev/null   # leftovers of the old stack
+docker rm -f container_redis container_backend container_audio container_video   container_frontend container_tr container_vllm_xoo container_vllm_oai 2>/dev/null
+docker network rm sys_net 2>/dev/null
 ```
 
-The old code is kept in `legacy/` for reference (see `legacy/NOTE.md`). The old `/models` content is not reused; the new HF cache lives in `/models/hf`.
+The old code is still in the git history (`git show bed08b0:legacy/NOTE.md`). The old `/models` content is not reused; the new HF cache lives in `/models/hf`.
 
 ## Operating
 
@@ -126,6 +126,6 @@ See `.env.example`. Useful knobs in `backend/orchestrator/config.py` (all settab
 
 ## Notes / known limitations
 
-* TRELLIS (3D) was removed in 2.0; the old setup is still in `legacy/`.
+* TRELLIS (3D) was removed in 2.0.
 * While a long video job (several minutes) holds the GPU, new chats wait. That is the trade-off of swap + queue on one GPU; the chat UI tells users why.
 * Running jobs can't be cancelled, only queued ones.

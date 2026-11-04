@@ -1,5 +1,0 @@
-fastapi
-uvicorn
-redis
-faster-whisper
-torch
