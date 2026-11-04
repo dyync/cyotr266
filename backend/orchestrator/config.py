@@ -14,23 +14,12 @@ class Settings(BaseSettings):
     vllm_url: str = "http://vllm:8000"
     media_url: str = "http://video:1376"
     asr_url: str = "http://audio:8000"
-    tr_url: str = "http://tr:1379"
     vllm_container: str = "container_vllm"
-    tr_container: str = "container_tr"
     compose_project: str = "aistack"
 
     # --- storage ----------------------------------------------------------
     data_dir: str = "/data"
     llm_config_path: str = "/config/llm.env"
-    # TRELLIS container path -> path as mounted (read-only) in this container.
-    # Longest prefix wins.
-    tr_path_map: str = (
-        "/usr/src/app/tr/app/TRELLIS=/trfs/trellis,"
-        "/usr/src/app/video=/trfs/video,"
-        "/usr/src/app=/trfs/app,"
-        "/tmp=/trfs/tmp,"
-        "/data=/data"
-    )
 
     # --- public /api compatibility endpoint ------------------------------
     api_keys: str = ""  # comma separated bearer tokens; empty = /api disabled
@@ -47,22 +36,12 @@ class Settings(BaseSettings):
     batch_max_seconds: float = 120
     llm_min_window: float = 20  # min seconds chats get between media batches
     job_ttl: int = 24 * 3600
-    trellis_start_timeout: float = 900
     llm_wake_timeout: float = 600
     llm_deploy_timeout: float = 3600
 
     @property
     def api_key_set(self) -> set[str]:
         return {k.strip() for k in self.api_keys.split(",") if k.strip()}
-
-    @property
-    def tr_path_pairs(self) -> list[tuple[str, str]]:
-        pairs = []
-        for item in self.tr_path_map.split(","):
-            if "=" in item:
-                src, dst = item.split("=", 1)
-                pairs.append((src.strip().rstrip("/"), dst.strip().rstrip("/")))
-        return sorted(pairs, key=lambda p: len(p[0]), reverse=True)
 
 
 @lru_cache

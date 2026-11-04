@@ -6,7 +6,7 @@ Runs in a throw-away backend container (httpx + the shared /data volume):
         -v ./scripts:/scripts:ro -v ./video/dragon.png:/assets/dragon.png:ro \
         -v ./audio/nk.mp3:/assets/nk.mp3:ro backend python /scripts/smoke_test.py
 
-    add  -e LOAD=1  for the concurrency test, -e SKIP=video,trellis to skip slow parts.
+    add  -e LOAD=1  for the concurrency test, -e SKIP=video to skip the slow video job.
 
 Env: ORCH_URL, INTERNAL_TOKEN + API_KEYS (taken from the container env), DATA_DIR,
      ASSETS_DIR (default /assets), SKIP, LOAD.
@@ -124,9 +124,6 @@ async def smoke(c: httpx.AsyncClient) -> None:
     if "video" not in SKIP:
         job = await run_job(c, "video", {"prompt": "waves rolling onto a beach at sunset", "resolution": "480p", "num_frames": 49, "steps": 20})
         record("video job (480p, 2s)", job["status"] == "done", json.dumps(job.get("result") or job.get("error"))[:200])
-    if "trellis" not in SKIP:
-        job = await run_job(c, "trellis", {"image_path": img})
-        record("trellis job", job["status"] == "done", json.dumps(job.get("result") or job.get("error"))[:200])
 
     r = await c.post(f"{ORCH}/api", json={"method": "vllm", "prompt": "hi"})
     record("/api rejects missing key", r.status_code == 401, str(r.status_code))

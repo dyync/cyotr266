@@ -1,4 +1,4 @@
-# AI Studio — multi-user LLM / image / video / speech / 3D on one RTX 4090
+# AI Studio — multi-user LLM / image / video / speech on one RTX 4090
 
 Gradio 6 web app for several simultaneous users on a single 24 GB GPU:
 
@@ -7,7 +7,6 @@ Gradio 6 web app for several simultaneous users on a single 24 GB GPU:
 | Chat  | Qwen3.5-9B (FP8) via official **vLLM 0.33** server, streaming, optional thinking mode | `vllm` |
 | Image | **Z-Image-Turbo** (6B, 9 steps)                  | `video` (media)    |
 | Video | **Wan 2.2 TI2V-5B**, text→video and image→video, 24 fps | `video` (media) |
-| 3D    | TRELLIS (`xoo4foo/tr22`, unchanged)              | `tr`               |
 | VIP   | OpenCV art filters (Öl, Aquarell, Bleistift, Pointillismus), CPU | `video` (media) |
 | Audio | **faster-whisper large-v3-turbo**, transcription + translation, SRT export | `audio` |
 | Admin | GPU/disk stats, container logs, switch the LLM to any HF model | `backend` |
@@ -21,18 +20,18 @@ Internet ─443─> caddy (HTTPS) ─> frontend  (Gradio 6, login, no GPU, no do
                                       ├─ GPU scheduler (Redis job queue + chat lease)
                                       ├─ /v1/chat/completions streaming proxy
                                       └─ only container with docker.sock
-          vllm (sleep mode) · video (media) · audio (ASR) · tr (on demand) · redis
+          vllm (sleep mode) · video (media) · audio (ASR) · redis
 ```
 
 **One GPU, many users — "swap + queue":**
 
 * The **LLM is the home state**. All chats go through the orchestrator and vLLM batches them (continuous batching), so 10+ people can chat at once.
-* **Image / video / 3D jobs go into one FIFO queue.** For a job, the scheduler stops new chats from starting and lets running chats finish (up to 60 s). It then puts vLLM to sleep, which moves the weights to CPU RAM and frees ~19 GB in seconds, and loads the media model. The UI shows the queue position and progress.
+* **Image / video jobs go into one FIFO queue.** For a job, the scheduler stops new chats from starting and lets running chats finish (up to 60 s). It then puts vLLM to sleep, which moves the weights to CPU RAM and frees ~19 GB in seconds, and loads the media model. The UI shows the queue position and progress.
 * Jobs of the same type run back to back, so the model is loaded only once. If chats are waiting, the scheduler hands the GPU back to the LLM after 4 jobs or 2 minutes, and chats get at least 20 s before the next batch starts.
 * Whisper (~2 GB) stays loaded the whole time, so transcription never waits for the queue.
 * Limits: each user can have 2 jobs queued (only 1 of them video) and 30 chat messages per minute. Change these in `.env`.
 
-VRAM budget (24 GB): vLLM 0.78 × 24 ≈ 18.7 GB (weights ~10 GB + KV cache) + Whisper ~2 GB. When vLLM is asleep, Z-Image (~13 GB peak with offload), Wan 2.2 5B (~20 GB peak with offload) or TRELLIS get the GPU instead.
+VRAM budget (24 GB): vLLM 0.78 × 24 ≈ 18.7 GB (weights ~10 GB + KV cache) + Whisper ~2 GB. When vLLM is asleep, Z-Image (~13 GB peak with offload), or Wan 2.2 5B (~20 GB peak with offload) get the GPU instead.
 
 ## Requirements
 
@@ -57,7 +56,6 @@ bash scripts/add_user.sh alice
 bash scripts/prefetch_models.sh
 
 # 4. start
-docker compose --profile trellis create tr   # once: TRELLIS is started/stopped by the scheduler
 docker compose up -d --build --wait
 ```
 
@@ -69,7 +67,7 @@ The old compose file published Redis, the Docker-control backend, vLLM and every
 
 ```bash
 docker compose -f legacy/docker-compose.yml -p "$(basename "$PWD")" down
-docker rm -f container_vllm_xoo container_vllm_oai 2>/dev/null   # containers the old backend created by hand
+docker rm -f container_vllm_xoo container_vllm_oai container_tr 2>/dev/null   # leftovers of the old stack
 ```
 
 The old code is kept in `legacy/` for reference (see `legacy/NOTE.md`). The old `/models` content is not reused; the new HF cache lives in `/models/hf`.
@@ -86,14 +84,14 @@ The old code is kept in `legacy/` for reference (see `legacy/NOTE.md`). The old 
 | End-to-end test | see below |
 | Update images | bump the pinned versions in `docker-compose.yml` / `*/pyproject.toml`, then run `uv lock` and `docker compose up -d --build` |
 
-**Smoke test** (chat, image, transcription of `audio/nk.mp3`, all VIP styles, video, TRELLIS, `/api`, admin auth):
+**Smoke test** (chat, image, transcription of `audio/nk.mp3`, all VIP styles, video, `/api`, admin auth):
 
 ```bash
 docker compose run --rm --no-deps -e ORCH_URL=http://backend:7861 \
   -v ./scripts:/scripts:ro -v ./video/dragon.png:/assets/dragon.png:ro -v ./audio/nk.mp3:/assets/nk.mp3:ro \
   backend python /scripts/smoke_test.py
 # concurrency: add  -e LOAD=1   (10 parallel chats + 3 image jobs + 2 transcriptions)
-# skip slow parts: -e SKIP=video,trellis
+# skip the slow video job: -e SKIP=video
 ```
 
 Unit tests for the scheduler (no GPU needed): `cd backend && uv run pytest`.
@@ -109,7 +107,7 @@ Unit tests for the scheduler (no GPU needed): `cd backend && uv run pytest`.
 * **Audio:** a fresh install pulls PyAV 19, which removed `av.open(metadata_errors=…)`. faster-whisper 1.2.1 still passes that argument, so every transcription failed. PyAV is now pinned to 18.1.0.
 * **Audio:** the container used `runtime: nvidia`, which needs a manually configured runtime on newer toolkits. The base image was `python:slim` (no cuBLAS/cuDNN for CTranslate2), and an unpinned `torch` pulled in CUDA 13 libraries that CTranslate2 can't use. It now uses an `nvidia/cuda:12.9.2-cudnn-runtime` base, the model is loaded once at startup, and if CUDA is unavailable it falls back to CPU.
 * **Audio:** the model dropdown sat in a hidden accordion with no value, and the audio file was passed as a `/tmp` path shared between containers. Uploads now go to the service directly as multipart.
-* **Image:** every image request *restarted* the TRELLIS container, which immediately loaded TRELLIS back into VRAM, so SDXL ran out of memory. On top of that, `HF_HOME` wasn't on `/models`, so models were downloaded again after each of these restarts; filenames came from the prompt, so long or unicode prompts crashed; and a LoRA scale was passed with no LoRA loaded.
+* **Image:** every image request *restarted* the old TRELLIS container, which immediately loaded TRELLIS back into VRAM, so SDXL ran out of memory. On top of that, `HF_HOME` wasn't on `/models`, so models were downloaded again after each of these restarts; filenames came from the prompt, so long or unicode prompts crashed; and a LoRA scale was passed with no LoRA loaded.
 
 **Multi-user and security:**
 
@@ -124,12 +122,10 @@ Unit tests for the scheduler (no GPU needed): `cd backend && uv run pytest`.
 ## Configuration reference
 
 See `.env.example`. Useful knobs in `backend/orchestrator/config.py` (all settable via env on the `backend` service):
-`DRAIN_TIMEOUT`, `CHAT_WAIT_TIMEOUT`, `BATCH_MAX_JOBS`, `BATCH_MAX_SECONDS`, `LLM_MIN_WINDOW`, `MAX_VIDEO_JOBS_PER_USER`, `TR_PATH_MAP`.
-
-`TR_PATH_MAP` maps paths inside the TRELLIS container to the read-only mounts in `backend`, so the files TRELLIS produces can be copied into `/data/outputs`. Adjust it if your `tr/app.py` writes somewhere other than `/usr/src/app/...` or `/tmp`.
+`DRAIN_TIMEOUT`, `CHAT_WAIT_TIMEOUT`, `BATCH_MAX_JOBS`, `BATCH_MAX_SECONDS`, `LLM_MIN_WINDOW`, `MAX_VIDEO_JOBS_PER_USER`.
 
 ## Notes / known limitations
 
-* `xoo4foo/tr22:latest` is the only unpinned image (your own TRELLIS build, intentionally unchanged). Pin it by digest once you are happy with it.
+* TRELLIS (3D) was removed in 2.0; the old setup is still in `legacy/`.
 * While a long video job (several minutes) holds the GPU, new chats wait. That is the trade-off of swap + queue on one GPU; the chat UI tells users why.
 * Running jobs can't be cancelled, only queued ones.

@@ -1,7 +1,6 @@
 # AI Studio — multi-user Gradio + vLLM + media stack for a single 24 GB GPU.
 #
 #   cp .env.example .env && $EDITOR .env          # secrets, domain, users
-#   docker compose --profile trellis create tr     # once: create (not start) TRELLIS
 #   docker compose up -d --build --wait
 #
 # Only Caddy publishes ports. Everything else talks on the private "aistack" network.
@@ -108,9 +107,7 @@ services:
       VLLM_URL: http://vllm:8000
       MEDIA_URL: http://video:1376
       ASR_URL: http://audio:8000
-      TR_URL: http://tr:1379
       VLLM_CONTAINER: container_vllm
-      TR_CONTAINER: container_tr
       COMPOSE_PROJECT: aistack
       LLM_CONFIG_PATH: /config/llm/llm.env
       DATA_DIR: /data
@@ -121,11 +118,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock  # only this container gets it
       - ${DATA_DIR:-./data}:/data
       - llm_config:/config/llm
-      # read-only views of the TRELLIS container's filesystem (see TR_PATH_MAP)
-      - ./tr:/trfs/app:ro
-      - ./trellisfiles:/trfs/trellis:ro
-      - ./video:/trfs/video:ro
-      - tr_tmp:/trfs/tmp:ro
     deploy: *gpu
     depends_on:
       init: { condition: service_completed_successfully }
@@ -201,36 +193,6 @@ services:
     networks: [aistack]
     logging: *logging
 
-  # TRELLIS (unchanged image). Started/stopped on demand by the backend scheduler,
-  # never by `docker compose up` (profile) -> create it once:
-  #   docker compose --profile trellis create tr
-  tr:
-    image: xoo4foo/tr22:latest
-    container_name: container_tr
-    profiles: [trellis]
-    restart: "no"
-    command: ["python", "app.py"]
-    environment:
-      <<: *hf-env
-      NVIDIA_VISIBLE_DEVICES: "0"
-      CUDA_VISIBLE_DEVICES: "0"
-      TR_IP: 0.0.0.0
-      TR_PORT: "1379"
-      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-    volumes:
-      - ./tr:/usr/src/app
-      - ./trellisfiles:/usr/src/app/tr/app/TRELLIS
-      - ./video:/usr/src/app/video
-      - ./utils:/usr/src/app/utils
-      - ../logs:/usr/src/app/logs
-      - ${MODELS_DIR:-/models}:/models
-      - tr_tmp:/tmp
-      - ${DATA_DIR:-./data}:/data
-    shm_size: 8gb
-    deploy: *gpu
-    networks: [aistack]
-    logging: *logging
-
 networks:
   aistack:
     name: aistack
@@ -240,4 +202,3 @@ volumes:
   caddy_config:
   redis_data:
   llm_config:
-  tr_tmp:

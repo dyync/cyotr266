@@ -1,4 +1,4 @@
-"""Concrete GPU backends used by the scheduler (vLLM, media service, TRELLIS)."""
+"""Concrete GPU backends used by the scheduler (vLLM, media service)."""
 
 from __future__ import annotations
 
@@ -6,9 +6,7 @@ import asyncio
 import logging
 import os
 import shlex
-import shutil
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -136,64 +134,6 @@ class GpuBackends:
             raise RuntimeError(_error_text(r))
         return r.json()
 
-    # --------------------------------------------------------------- TRELLIS
-    async def trellis_start(self) -> None:
-        try:
-            await docker_ops.start(self.s.tr_container)
-        except docker_ops.NotFound as e:
-            raise RuntimeError(
-                f"TRELLIS container '{self.s.tr_container}' does not exist. "
-                "Create it once with: docker compose --profile trellis create tr"
-            ) from e
-        deadline = time.monotonic() + self.s.trellis_start_timeout
-        while time.monotonic() < deadline:
-            try:
-                r = await self.http.get(self.s.tr_url + "/", timeout=5)
-                if r.status_code < 500:
-                    log.info("TRELLIS ready")
-                    return
-            except httpx.HTTPError:
-                pass
-            await asyncio.sleep(3)
-        raise TimeoutError("TRELLIS container did not become ready")
-
-    async def trellis_stop(self) -> None:
-        try:
-            await docker_ops.stop(self.s.tr_container)
-        except docker_ops.NotFound:
-            log.warning("TRELLIS container %s not found", self.s.tr_container)
-
-    def _tr_local_path(self, path: str) -> Path | None:
-        for src, dst in self.s.tr_path_pairs:
-            if path == src or path.startswith(src + "/"):
-                return Path(dst + path[len(src):])
-        return None
-
-    async def _trellis_generate(self, job: dict[str, Any], on_progress) -> dict[str, Any]:
-        image_path = under(job["params"]["image_path"], Path(self.s.data_dir) / "uploads")
-        await on_progress(0.05)
-        r = await self.http.post(f"{self.s.tr_url}/t2", json={"input_image_path": str(image_path)}, timeout=None)
-        if r.status_code != 200:
-            raise RuntimeError(_error_text(r))
-        data = r.json().get("result_data", {})
-        if not isinstance(data, dict) or "output_path" not in data:
-            raise RuntimeError(f"unexpected TRELLIS response: {str(data)[:500]}")
-
-        out_dir = ensure_dir(Path(self.s.data_dir) / "outputs" / safe_user(job["user"]))
-        files: dict[str, str] = {}
-        for key, value in data.items():
-            if not isinstance(value, str) or not value.startswith("/"):
-                continue
-            local = self._tr_local_path(value)
-            if local is None or not local.is_file():
-                continue
-            dst = out_dir / f"{uuid.uuid4().hex}{local.suffix}"
-            await asyncio.to_thread(shutil.copyfile, local, dst)
-            files[key] = str(own(dst))
-        if "output_path" not in files:
-            raise RuntimeError(f"TRELLIS output {data['output_path']} not reachable via TR_PATH_MAP")
-        return {"path": files["output_path"], "files": files}
-
     # ---------------------------------------------------------------- deploy
     def read_llm_config(self) -> dict[str, str]:
         cfg: dict[str, str] = {}
@@ -246,8 +186,6 @@ class GpuBackends:
         kind = job["type"]
         if kind in ("image", "video"):
             return await self._media_generate(kind, job, on_progress)
-        if kind == "trellis":
-            return await self._trellis_generate(job, on_progress)
         if kind == "deploy":
             return await self._deploy(job, on_progress)
         raise ValueError(f"unknown job type {kind}")

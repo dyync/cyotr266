@@ -2,7 +2,7 @@
 
 * ``llm`` is the home state. Chat requests take a *shared* lease so vLLM keeps
   batching across users.
-* Media jobs (image / video / trellis / deploy) run from a FIFO queue in Redis.
+* Media jobs (image / video / deploy) run from a FIFO queue in Redis.
   The worker takes the GPU *exclusively*: new chats wait (writer preference),
   running chats are drained (bounded by ``drain_timeout``), then vLLM is put to
   sleep and the target model is loaded.
@@ -32,9 +32,9 @@ Q_RUNNING = "gpu:running"
 HOME = "llm"
 MAINTENANCE = "maintenance"
 
-JOB_TYPES = {"image", "video", "trellis", "deploy"}
+JOB_TYPES = {"image", "video", "deploy"}
 # which holder a job type needs
-HOLDER_FOR = {"image": "image", "video": "video", "trellis": "trellis", "deploy": MAINTENANCE}
+HOLDER_FOR = {"image": "image", "video": "video", "deploy": MAINTENANCE}
 ACTIVE = {"queued", "running"}
 
 
@@ -52,8 +52,6 @@ class Backends(Protocol):
     async def llm_ensure_awake(self) -> None: ...
     async def media_load(self, kind: str) -> None: ...
     async def media_unload(self) -> None: ...
-    async def trellis_start(self) -> None: ...
-    async def trellis_stop(self) -> None: ...
     async def run_job(self, job: dict[str, Any], on_progress) -> dict[str, Any]: ...
 
 
@@ -137,8 +135,6 @@ class Scheduler:
         # release the previous non-LLM holder
         if prev in ("image", "video", "unknown") and target not in ("image", "video"):
             await self.b.media_unload()
-        if prev in ("trellis", "unknown"):
-            await self.b.trellis_stop()
 
         # acquire the target
         if target == HOME:
@@ -154,8 +150,6 @@ class Scheduler:
             await self.b.llm_sleep(abort=True)
         if target in ("image", "video"):
             await self.b.media_load(target)
-        elif target == "trellis":
-            await self.b.trellis_start()
         self._set_holder(target)
 
     def _set_holder(self, holder: str) -> None:

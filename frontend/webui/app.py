@@ -40,8 +40,6 @@ def build_app() -> gr.Blocks:
                 tab_media.build_image()
             with gr.Tab("Video"):
                 tab_media.build_video()
-            with gr.Tab("3D"):
-                tab_media.build_trellis()
             with gr.Tab("VIP"):
                 tab_media.build_vip()
             with gr.Tab("Audio"):

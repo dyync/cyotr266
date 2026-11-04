@@ -195,16 +195,12 @@ class VideoParams(BaseModel):
     seed: int = Field(-1, ge=-1)
 
 
-class TrellisParams(BaseModel):
-    image_path: str
-
-
 class JobRequest(BaseModel):
-    type: str = Field(pattern="^(image|video|trellis)$")
+    type: str = Field(pattern="^(image|video)$")
     params: dict[str, Any]
 
 
-PARAM_MODELS = {"image": ImageParams, "video": VideoParams, "trellis": TrellisParams}
+PARAM_MODELS = {"image": ImageParams, "video": VideoParams}
 UPLOADS = Path(S.data_dir) / "uploads"
 
 
@@ -309,8 +305,8 @@ async def admin_logs(name: str, tail: int = 300, _: Caller = Depends(admin)):
 
 @app.post("/admin/containers/{name}/{action}")
 async def admin_container_action(name: str, action: str, _: Caller = Depends(admin)):
-    if name in (S.vllm_container, S.tr_container):
-        raise HTTPException(409, "GPU containers are managed by the scheduler (use model deploy instead)")
+    if name == S.vllm_container:
+        raise HTTPException(409, "vLLM is managed by the scheduler (use model deploy instead)")
     fn = {"start": docker_ops.start, "stop": docker_ops.stop, "restart": docker_ops.restart}.get(action)
     if fn is None:
         raise HTTPException(400, "action must be start|stop|restart")

@@ -21,7 +21,6 @@ class FakeBackends:
         self.fail_types: set[str] = set()
         self.llm_awake = True
         self.media_loaded: str | None = None
-        self.trellis_running = False
         self.gpu_users: set[str] = set()  # what is resident on the GPU right now
         self.max_concurrent_gpu = 0
 
@@ -55,17 +54,6 @@ class FakeBackends:
         self.media_loaded = None
         self.gpu_users.discard("image")
         self.gpu_users.discard("video")
-
-    async def trellis_start(self) -> None:
-        self.events.append("trellis_start")
-        self.trellis_running = True
-        self.gpu_users.add("trellis")
-        self._track()
-
-    async def trellis_stop(self) -> None:
-        self.events.append("trellis_stop")
-        self.trellis_running = False
-        self.gpu_users.discard("trellis")
 
     async def run_job(self, job, on_progress):
         t = job["type"]
@@ -122,7 +110,7 @@ async def sched():
 async def test_init_returns_home_and_cleans_gpu(sched):
     s, b = sched
     assert s.holder == "llm"
-    assert "media_unload" in b.events and "trellis_stop" in b.events and "llm_wake" in b.events
+    assert "media_unload" in b.events and "llm_wake" in b.events
 
 
 async def test_image_job_swaps_and_returns_home(sched):
@@ -217,14 +205,14 @@ async def test_direct_switch_between_media_types_without_chats(sched):
     s, b = sched
     b.events.clear()
     j1 = await s.submit("a", "image", {"n": 1})
-    j2 = await s.submit("b", "trellis", {"n": 2})
-    j3 = await s.submit("c", "video", {"n": 3})
+    j2 = await s.submit("b", "video", {"n": 2})
+    j3 = await s.submit("c", "image", {"n": 3})
     for j in (j1, j2, j3):
         await wait_status(s, j["id"])
     await wait_holder(s, "llm")
     assert b.events.count("llm_wake") == 1  # no detour through the LLM
-    assert b.events.index("media_unload") < b.events.index("trellis_start")
-    assert b.events.index("trellis_stop") < b.events.index("media_load(video)")
+    loads = [e for e in b.events if e.startswith("media_load")]
+    assert loads == ["media_load(image)", "media_load(video)", "media_load(image)"]
     assert b.max_concurrent_gpu == 1
 
 

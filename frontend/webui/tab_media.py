@@ -1,4 +1,4 @@
-"""Image, Video, 3D, VIP and Audio tabs. GPU work goes through the job queue."""
+"""Image, Video, VIP and Audio tabs. GPU work goes through the job queue."""
 
 from __future__ import annotations
 
@@ -99,46 +99,6 @@ def build_video() -> None:
             out = gr.Video(label="Result", interactive=False, height=520)
     mode.change(lambda m: gr.update(visible=m == "Image → Video"), mode, image)
     go.click(run_video, [mode, prompt, image, resolution, seconds, steps, seed], [job_id, status, out], concurrency_limit=None)
-    stop.click(cancel_job, job_id, status)
-
-
-# ------------------------------------------------------------------------- 3D
-async def run_trellis(image: str | None, request: gr.Request):
-    user = current_user(request)
-    if not image:
-        raise gr.Error("Please upload an image.")
-    job = await BACKEND.submit(user, "trellis", {"image_path": stage_upload(image, user)})
-    yield job["id"], describe({**job, "gpu": {}}), NO_CHANGE, NO_CHANGE, NO_CHANGE
-    async for job in watch_job(user, job, poll=2):
-        if job["status"] != "done":
-            yield job["id"], describe(job), NO_CHANGE, NO_CHANGE, NO_CHANGE
-            continue
-        files = list((job["result"].get("files") or {}).values()) or [job["result"]["path"]]
-        video = next((f for f in files if f.endswith((".mp4", ".webm"))), None)
-        model = next((f for f in files if f.endswith((".glb", ".gltf", ".obj", ".ply"))), None)
-        yield (
-            None,
-            describe(job),
-            gr.update(value=video, visible=video is not None),
-            gr.update(value=model, visible=model is not None),
-            files,
-        )
-
-
-def build_trellis() -> None:
-    job_id = gr.State(None)
-    with gr.Row():
-        with gr.Column(scale=2):
-            image = gr.Image(label="Input image", type="filepath", height=320)
-            with gr.Row():
-                go = gr.Button("Image → 3D", variant="primary")
-                stop = gr.Button("Cancel")
-            status = gr.Markdown()
-        with gr.Column(scale=3):
-            video = gr.Video(label="Preview", interactive=False, visible=False)
-            model = gr.Model3D(label="3D model", visible=False)
-            files = gr.File(label="Downloads", file_count="multiple", interactive=False)
-    go.click(run_trellis, image, [job_id, status, video, model, files], concurrency_limit=None)
     stop.click(cancel_job, job_id, status)
 
 

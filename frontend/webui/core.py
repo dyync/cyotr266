@@ -138,7 +138,6 @@ HOLDER_LABEL = {
     "llm": "the language model",
     "image": "image generation",
     "video": "video generation",
-    "trellis": "3D generation",
     "maintenance": "a model switch",
     "unknown": "start-up",
 }
