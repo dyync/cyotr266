@@ -1,0 +1,6 @@
+# Logins for the web UI. Create entries with:  scripts/add_user.sh <name> [--admin]
+# Admins see the Admin tab (GPU stats, container logs, LLM model switching).
+#
+# [users.alice]
+# password_hash = "$2b$12$...bcrypt..."
+# admin = true

@@ -1,0 +1,243 @@
+# AI Studio — multi-user Gradio + vLLM + media stack for a single 24 GB GPU.
+#
+#   cp .env.example .env && $EDITOR .env          # secrets, domain, users
+#   docker compose --profile trellis create tr     # once: create (not start) TRELLIS
+#   docker compose up -d --build --wait
+#
+# Only Caddy publishes ports. Everything else talks on the private "aistack" network.
+
+name: aistack
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "20m", max-file: "5" }
+
+x-gpu: &gpu
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
+
+x-hf-env: &hf-env
+  HF_HOME: /models/hf
+  HF_TOKEN: ${HF_TOKEN:-}
+  HF_HUB_DISABLE_TELEMETRY: "1"
+
+services:
+  # one-shot: create shared dirs owned by the non-root app user (uid 1000)
+  init:
+    image: busybox:1.38.0-musl
+    container_name: container_init
+    restart: "no"
+    command: ["sh", "-c", "mkdir -p /models/hf /data/uploads /data/outputs && chown 1000:1000 /models/hf /data /data/uploads /data/outputs && chmod 2775 /models/hf /data"]
+    volumes:
+      - ${MODELS_DIR:-/models}:/models
+      - ${DATA_DIR:-./data}:/data
+    network_mode: none
+
+  caddy:
+    image: caddy:2.11.8
+    container_name: container_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env (use ":80" for plain HTTP on a LAN)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      frontend: { condition: service_healthy }
+    networks: [aistack]
+    logging: *logging
+
+  redis:
+    image: redis:8.8.4
+    container_name: container_redis
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD}", "--appendonly", "yes", "--save", ""]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [aistack]
+    logging: *logging
+
+  frontend:
+    build: { context: ./frontend }
+    image: aistack/frontend:2.0.0
+    container_name: container_frontend
+    restart: unless-stopped
+    environment:
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?set INTERNAL_TOKEN}
+      BACKEND_URL: http://backend:7861
+      USERS_FILE: /config/users.toml
+      DEFAULTS_FILE: /app/utils/defaults.json
+      DATA_DIR: /data
+    volumes:
+      - ./utils:/app/utils:ro
+      - ./config:/config:ro  # users.toml (hot-reloaded; dir mount survives editor rewrites)
+      - ${DATA_DIR:-./data}:/data
+    depends_on:
+      init: { condition: service_completed_successfully }
+      backend: { condition: service_healthy }
+    networks: [aistack]
+    logging: *logging
+
+  backend:
+    build: { context: ./backend }
+    image: aistack/backend:2.0.0
+    container_name: container_backend
+    restart: unless-stopped
+    environment:
+      <<: *hf-env
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      API_KEYS: ${API_KEYS:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      VLLM_URL: http://vllm:8000
+      MEDIA_URL: http://video:1376
+      ASR_URL: http://audio:8000
+      TR_URL: http://tr:1379
+      VLLM_CONTAINER: container_vllm
+      TR_CONTAINER: container_tr
+      COMPOSE_PROJECT: aistack
+      LLM_CONFIG_PATH: /config/llm/llm.env
+      DATA_DIR: /data
+      MAX_JOBS_PER_USER: ${MAX_JOBS_PER_USER:-2}
+      CHAT_RPM: ${CHAT_RPM:-30}
+      NVIDIA_DRIVER_CAPABILITIES: utility  # NVML stats only, no CUDA context
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # only this container gets it
+      - ${DATA_DIR:-./data}:/data
+      - llm_config:/config/llm
+      # read-only views of the TRELLIS container's filesystem (see TR_PATH_MAP)
+      - ./tr:/trfs/app:ro
+      - ./trellisfiles:/trfs/trellis:ro
+      - ./video:/trfs/video:ro
+      - tr_tmp:/trfs/tmp:ro
+    deploy: *gpu
+    depends_on:
+      init: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: [aistack]
+    logging: *logging
+
+  vllm:
+    image: vllm/vllm-openai:v0.33.0
+    container_name: container_vllm
+    restart: unless-stopped
+    depends_on:
+      init: { condition: service_completed_successfully }
+    entrypoint: ["/bin/sh", "/start.sh"]
+    user: "1000:1000"
+    environment:
+      <<: *hf-env
+      HOME: /tmp/home  # vLLM / triton / flashinfer caches (non-root)
+      VLLM_SERVER_DEV_MODE: "1"  # enables /sleep + /wake_up (internal network only)
+      DEFAULT_LLM_MODEL: ${LLM_MODEL:-RedHatAI/Qwen3.5-9B-FP8-dynamic}
+      DEFAULT_LLM_MAX_MODEL_LEN: ${LLM_MAX_MODEL_LEN:-32768}
+      DEFAULT_LLM_GPU_UTIL: ${LLM_GPU_UTIL:-0.78}
+      DEFAULT_LLM_EXTRA_ARGS: ${LLM_EXTRA_ARGS:---language-model-only --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder}
+    volumes:
+      - ./vllm/start.sh:/start.sh:ro
+      - ${MODELS_DIR:-/models}:/models
+      - llm_config:/config/llm:ro
+    shm_size: 8gb
+    deploy: *gpu
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 1800s  # first start downloads the model
+      retries: 5
+    networks: [aistack]
+    logging: *logging
+
+  audio:
+    build: { context: ./audio }
+    image: aistack/audio:2.0.0
+    container_name: container_audio
+    restart: unless-stopped
+    depends_on:
+      init: { condition: service_completed_successfully }
+    environment:
+      <<: *hf-env
+      ASR_MODEL: ${ASR_MODEL:-large-v3-turbo}
+      ASR_COMPUTE_TYPE: int8_float16
+    volumes:
+      - ${MODELS_DIR:-/models}:/models
+    deploy: *gpu
+    networks: [aistack]
+    logging: *logging
+
+  video:
+    build: { context: ./video }
+    image: aistack/media:2.0.0
+    container_name: container_video
+    restart: unless-stopped
+    depends_on:
+      init: { condition: service_completed_successfully }
+    environment:
+      <<: *hf-env
+      IMAGE_MODEL: ${IMAGE_MODEL:-Tongyi-MAI/Z-Image-Turbo}
+      VIDEO_MODEL: ${VIDEO_MODEL:-Wan-AI/Wan2.2-TI2V-5B-Diffusers}
+      DATA_DIR: /data
+    volumes:
+      - ${MODELS_DIR:-/models}:/models
+      - ${DATA_DIR:-./data}:/data
+    shm_size: 4gb
+    deploy: *gpu
+    networks: [aistack]
+    logging: *logging
+
+  # TRELLIS (unchanged image). Started/stopped on demand by the backend scheduler,
+  # never by `docker compose up` (profile) -> create it once:
+  #   docker compose --profile trellis create tr
+  tr:
+    image: xoo4foo/tr22:latest
+    container_name: container_tr
+    profiles: [trellis]
+    restart: "no"
+    command: ["python", "app.py"]
+    environment:
+      <<: *hf-env
+      NVIDIA_VISIBLE_DEVICES: "0"
+      CUDA_VISIBLE_DEVICES: "0"
+      TR_IP: 0.0.0.0
+      TR_PORT: "1379"
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    volumes:
+      - ./tr:/usr/src/app
+      - ./trellisfiles:/usr/src/app/tr/app/TRELLIS
+      - ./video:/usr/src/app/video
+      - ./utils:/usr/src/app/utils
+      - ../logs:/usr/src/app/logs
+      - ${MODELS_DIR:-/models}:/models
+      - tr_tmp:/tmp
+      - ${DATA_DIR:-./data}:/data
+    shm_size: 8gb
+    deploy: *gpu
+    networks: [aistack]
+    logging: *logging
+
+networks:
+  aistack:
+    name: aistack
+
+volumes:
+  caddy_data:
+  caddy_config:
+  redis_data:
+  llm_config:
+  tr_tmp:

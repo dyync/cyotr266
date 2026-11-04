@@ -1,0 +1,8 @@
+# Deployed on Linux: keep LF everywhere (shell scripts break with CRLF)
+* text=auto eol=lf
+*.pth binary
+*.mp4 binary
+*.mp3 binary
+*.png binary
+*.jpg binary
+*.ico binary

@@ -1,0 +1,29 @@
+# Public entry point. Automatic HTTPS when DOMAIN is a real hostname
+# (DNS must point at this VM and ports 80/443 must be open); use DOMAIN=":80"
+# for plain HTTP on a trusted LAN.
+{$DOMAIN} {
+	encode zstd gzip
+
+	request_body {
+		max_size 250MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Legacy external API (bearer API key) and the images it returns.
+	@api path /api /images/api-*
+	handle @api {
+		reverse_proxy backend:7861
+	}
+
+	# Everything else is the Gradio app (has its own login).
+	handle {
+		reverse_proxy frontend:7860
+	}
+}

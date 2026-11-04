@@ -1,0 +1,12 @@
+# secrets / local config
+.env
+config/users.toml
+
+# runtime data
+data/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/

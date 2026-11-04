@@ -1,0 +1,216 @@
+services:
+  redis:
+    image: redis:latest
+    container_name: container_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - sys_net
+    volumes:
+      - /redis:/redis
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "7861:7861"
+    networks:
+      - sys_net
+    container_name: container_backend
+    environment:
+      - BACKEND_IP=0.0.0.0
+      - VLLM_PORT=1370
+      - VIDEO_PORT=1376
+      - REDIS_PORT=6379
+      - BACKEND_PORT=7861
+      - NVIDIA_VISIBLE_DEVICES=0  # Use specific GPU
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - ./backend:/usr/src/app
+      - ./utils:/usr/src/app/utils
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../logs:/usr/src/app/logs
+      - /models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  audio:
+    build:
+      context: ./audio
+    ports:
+      - "8000:8000"
+    networks:
+      - sys_net
+    container_name: container_audio
+    environment:
+      - AUDIO_IP=0.0.0.0
+      - AUDIO_PORT=8000
+      - REDIS_PORT=6379
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ./audio:/usr/src/app
+      - ./utils:/usr/src/app/utils
+      - ../logs:/usr/src/app/logs
+      - /models:/models
+      - /tmp:/tmp
+    runtime: nvidia
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+
+  video:
+    build:
+      context: ./video
+    ports:
+      - "1376:1376"
+    networks:
+      - sys_net
+    container_name: container_video
+    environment:
+      - VIDEO_IP=0.0.0.0
+      - VIDEO_PORT=1376
+      - REDIS_PORT=6379
+      - NVIDIA_VISIBLE_DEVICES=0
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    volumes:
+      - ./video:/usr/src/app
+      - ./utils:/usr/src/app/utils
+      - ../logs:/usr/src/app/logs
+      - /models:/models
+      - /tmp:/tmp
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  vllm:
+    build:
+      context: ./vllm
+    image: xoo4foo/zzvllm52:latest
+    ports:
+      - "1370:1370"
+    networks:
+      - sys_net
+    container_name: container_vllm_xoo
+    volumes:
+      - /models:/models
+    shm_size: 8gb
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
+      - NCCL_DEBUG=INFO
+      - VLLM_PORT=1370
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: [
+      "python", "app.py",
+      "--model", "Qwen/Qwen2.5-1.5B-Instruct",
+      "--port", "1370",
+      "--tensor-parallel-size", "1",
+      "--gpu-memory-utilization", "0.7",  # Reduced from 0.85
+      "--max-model-len", "4096"
+    ]
+
+  tr:
+    build:
+      context: ./tr
+    image: xoo4foo/tr22:latest
+    ports:
+      - "1379:1379"
+    networks:
+      - sys_net
+    container_name: container_tr
+    command: ["python", "app.py"]
+    volumes:
+      - ./tr:/usr/src/app
+      - ./trellisfiles:/usr/src/app/tr/app/TRELLIS
+      - ./video:/usr/src/app/video
+      - ./utils:/usr/src/app/utils
+      - ../logs:/usr/src/app/logs
+      - /models:/models
+      - /tmp:/tmp
+    shm_size: 8gb
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
+      - NCCL_DEBUG=INFO
+      - TR_IP=0.0.0.0
+      - TR_PORT=1379
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "7860:7860"
+    networks:
+      - sys_net
+    container_name: container_frontend
+    environment:
+      - FRONTEND_IP=0.0.0.0
+      - FRONTEND_PORT=7860
+      - VLLM_PORT=1370
+      - REDIS_PORT=6379
+      - BACKEND_PORT=7861
+      - AUDIO_PORT=8000
+      - TTS_PORT=1375
+      - VIDEO_PORT=1376
+      - TRAIN_PORT=1378
+      - TR_PORT=1379
+      - NVIDIA_VISIBLE_DEVICES=0
+    volumes:
+      - ./frontend:/usr/src/app
+      - ./trellisfiles:/usr/src/app/tr/app/TRELLIS
+      - ./tr:/usr/src/app/tr
+      - ./video:/usr/src/app/video
+      - ./utils:/usr/src/app/utils
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../logs:/usr/src/app/logs
+      - /models:/models
+      - /tmp:/tmp
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - redis
+      - tr
+    restart: unless-stopped
+
+networks:
+  sys_net:
+    name: sys_net
+    driver: bridge

@@ -1,0 +1,46 @@
+{
+    "frontend": {
+        "chat": {
+            "welcome": "**Hi!** Ask me anything. Several people share this GPU — if someone is generating an image or video, your answer starts right after.",
+            "placeholder": "Message…",
+            "system_prompt": "You are a helpful assistant. Answer in the language of the user.",
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "max_tokens": 2048
+        },
+        "image": {
+            "prompt": "80s sports car cruising down a scenic coastal highway at sunset, shot on Kodak Ektar 100",
+            "steps": 9,
+            "sizes": {
+                "Square 1024×1024": [1024, 1024],
+                "Landscape 1344×768": [1344, 768],
+                "Portrait 768×1344": [768, 1344],
+                "Landscape 1216×832": [1216, 832],
+                "Portrait 832×1216": [832, 1216],
+                "Wide 1536×640": [1536, 640]
+            }
+        },
+        "video": {
+            "prompt": "A wide-angle panoramic view of a futuristic Japanese megacity at night, raining, wet reflective streets, slow camera dolly forward",
+            "resolution": "480p",
+            "seconds": 3,
+            "steps": 30,
+            "note": "Wan 2.2 TI2V-5B · 24 fps. A 3 s 480p clip takes a few minutes on the 4090; 720p/5 s takes considerably longer. Other users' image jobs queue behind it."
+        },
+        "vip_styles": {
+            "Öl": "oil",
+            "Aquarell": "aquarell",
+            "Bleistift": "bleistift",
+            "Pointillismus": "point"
+        },
+        "audio": {
+            "languages": ["auto", "de", "en", "fr", "es", "it", "nl", "pl", "pt", "tr", "ru", "uk", "ar", "zh", "ja", "ko"]
+        },
+        "suggested_llms": [
+            "RedHatAI/Qwen3.5-9B-FP8-dynamic",
+            "Qwen/Qwen3.5-4B",
+            "Qwen/Qwen3-8B-AWQ",
+            "Qwen/Qwen3-4B-Instruct-2507-FP8"
+        ]
+    }
+}
